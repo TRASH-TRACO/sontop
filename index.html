@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>손톱 — 손톱 뜯기 감지 알림</title>
+<meta name="description" content="카메라로 손끝이 입에 닿는 순간을 감지해 경고하는 온디바이스 웹 앱" />
+<meta name="theme-color" content="#0b1117" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+<link rel="icon" href="./icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="mobile-web-app-capable" content="yes" />
+<link rel="stylesheet" href="./src/styles.css" />
+</head>
+<body>
+<div id="stage">
+  <video id="video" playsinline autoplay muted></video>
+  <canvas id="overlay"></canvas>
+
+  <div id="alarm" class="alarm" hidden>
+    <div class="alarm-inner">
+      <div class="alarm-title">손 내려!</div>
+      <div class="alarm-sub">손끝이 입에 닿았어요</div>
+    </div>
+  </div>
+
+  <div id="boot" class="boot">
+    <img src="./icons/icon-192.png" alt="" width="72" height="72" />
+    <h1>손톱</h1>
+    <p class="boot-sub">손끝이 입으로 올라가면 바로 알려줍니다.<br />영상은 기기 밖으로 나가지 않습니다.</p>
+    <button id="start" class="primary">카메라 켜고 시작</button>
+    <p id="bootStatus" class="boot-status"></p>
+  </div>
+
+  <div id="hud" class="hud" hidden>
+    <div class="hud-row">
+      <span id="stateDot" class="dot"></span>
+      <span id="stateText">대기</span>
+      <span class="spacer"></span>
+      <span id="fpsText" class="muted">–</span>
+    </div>
+    <div class="gauge" title="입까지의 거리 (얼굴 너비 기준)">
+      <div id="gaugeFill" class="gauge-fill"></div>
+      <div id="gaugeMark" class="gauge-mark"></div>
+    </div>
+    <div class="hud-row muted small">
+      <span id="distText">거리 –</span>
+      <span class="spacer"></span>
+      <span id="countText">오늘 0회</span>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <button id="toggle" class="chip" hidden>일시정지</button>
+    <button id="settingsBtn" class="chip" hidden>설정</button>
+  </div>
+</div>
+
+<dialog id="settings">
+  <form method="dialog" class="sheet">
+    <h2>설정</h2>
+
+    <label class="field">
+      <span class="field-head">민감도 — 입에서 이만큼 가까우면 경고<output id="thresholdOut"></output></span>
+      <input type="range" id="threshold" min="0.08" max="0.50" step="0.01" />
+      <small>숫자가 클수록 예민합니다. 기본 0.22 (얼굴 너비의 22%)</small>
+    </label>
+
+    <label class="field">
+      <span class="field-head">유지 시간 — 이만큼 계속 가까우면 경고<output id="dwellOut"></output></span>
+      <input type="range" id="dwell" min="0" max="3000" step="100" />
+      <small>짧으면 즉각 반응, 길면 오탐이 줄어듭니다.</small>
+    </label>
+
+    <label class="field">
+      <span class="field-head">재알림 간격<output id="cooldownOut"></output></span>
+      <input type="range" id="cooldown" min="1000" max="30000" step="1000" />
+    </label>
+
+    <label class="row"><input type="checkbox" id="sound" /><span>소리 경고</span></label>
+    <label class="row"><input type="checkbox" id="speech" /><span>음성 경고 ("손 내려")</span></label>
+    <label class="row"><input type="checkbox" id="vibrate" /><span>진동 (안드로이드)</span></label>
+    <label class="row"><input type="checkbox" id="notify" /><span>시스템 알림 (다른 탭에 있을 때)</span></label>
+    <label class="row"><input type="checkbox" id="debug" /><span>랜드마크 표시</span></label>
+    <label class="row"><input type="checkbox" id="mirror" /><span>좌우 반전(거울)</span></label>
+
+    <label class="field">
+      <span>카메라</span>
+      <select id="camera"></select>
+    </label>
+
+    <div class="stats">
+      <h3>기록</h3>
+      <div id="history" class="history"></div>
+      <button type="button" id="testAlarm" class="chip">경고 테스트</button>
+      <button type="button" id="resetStats" class="chip danger">기록 지우기</button>
+    </div>
+
+    <menu>
+      <button value="close" class="primary">닫기</button>
+    </menu>
+  </form>
+</dialog>
+
+<script type="module" src="./src/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,500 @@
+import { createDetector, BiteTracker, HAND_CONNECTIONS } from "./detector.js";
+
+const $ = (id) => document.getElementById(id);
+
+const el = {
+  video: $("video"),
+  overlay: $("overlay"),
+  boot: $("boot"),
+  bootStatus: $("bootStatus"),
+  start: $("start"),
+  hud: $("hud"),
+  stateDot: $("stateDot"),
+  stateText: $("stateText"),
+  fpsText: $("fpsText"),
+  gaugeFill: $("gaugeFill"),
+  gaugeMark: $("gaugeMark"),
+  distText: $("distText"),
+  countText: $("countText"),
+  alarm: $("alarm"),
+  toggle: $("toggle"),
+  settingsBtn: $("settingsBtn"),
+  settings: $("settings"),
+  camera: $("camera"),
+  history: $("history"),
+  testAlarm: $("testAlarm"),
+  resetStats: $("resetStats"),
+};
+
+const ctx = el.overlay.getContext("2d");
+
+/* ------------------------------------------------------------------ settings */
+
+const SETTINGS_KEY = "sontop.settings.v1";
+const STATS_KEY = "sontop.stats.v1";
+
+const DEFAULTS = {
+  threshold: 0.22,
+  dwell: 900,
+  cooldown: 6000,
+  sound: true,
+  speech: false,
+  vibrate: true,
+  notify: false,
+  debug: false,
+  mirror: true,
+  deviceId: "",
+};
+
+const settings = { ...DEFAULTS, ...read(SETTINGS_KEY, {}) };
+
+function read(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function write(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* private mode — settings just won't persist */
+  }
+}
+
+/* --------------------------------------------------------------------- state */
+
+const tracker = new BiteTracker({
+  threshold: settings.threshold,
+  dwellMs: settings.dwell,
+  cooldownMs: settings.cooldown,
+});
+
+let detector = null;
+let stream = null;
+let running = false;
+let wakeLock = null;
+let rafId = 0;
+// Bumped on every pause/resume so a frame callback queued before a pause can't
+// start a second loop chain when it finally fires.
+let loopGen = 0;
+let lastTick = 0;
+let smoothedFps = 0;
+const TARGET_INTERVAL = 1000 / 18;
+
+/* --------------------------------------------------------------------- alarm */
+
+let audioCtx = null;
+let beepTimer = 0;
+
+function ensureAudio() {
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) audioCtx = new AC();
+  }
+  if (audioCtx?.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+
+function beep(freq = 880, ms = 160, gain = 0.18) {
+  const ac = ensureAudio();
+  if (!ac) return;
+  const osc = ac.createOscillator();
+  const amp = ac.createGain();
+  osc.type = "square";
+  osc.frequency.value = freq;
+  amp.gain.setValueAtTime(0.0001, ac.currentTime);
+  amp.gain.exponentialRampToValueAtTime(gain, ac.currentTime + 0.01);
+  amp.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + ms / 1000);
+  osc.connect(amp).connect(ac.destination);
+  osc.start();
+  osc.stop(ac.currentTime + ms / 1000 + 0.02);
+}
+
+function fireAlarm() {
+  el.alarm.hidden = false;
+
+  if (settings.sound) {
+    beep(920, 150);
+    setTimeout(() => beep(1180, 200), 180);
+    clearInterval(beepTimer);
+    beepTimer = setInterval(() => {
+      if (!el.alarm.hidden && settings.sound) beep(920, 120);
+      else clearInterval(beepTimer);
+    }, 900);
+  }
+
+  if (settings.speech && "speechSynthesis" in window) {
+    const u = new SpeechSynthesisUtterance("손 내려");
+    u.lang = "ko-KR";
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  }
+
+  if (settings.vibrate && navigator.vibrate) navigator.vibrate([120, 80, 120, 80, 200]);
+
+  if (settings.notify && "Notification" in window && Notification.permission === "granted" && document.hidden) {
+    new Notification("손 내려!", { body: "손톱 뜯는 동작이 감지됐어요.", icon: "./icons/icon-192.png", tag: "sontop" });
+  }
+
+  bumpStats();
+}
+
+function clearAlarm() {
+  el.alarm.hidden = true;
+  clearInterval(beepTimer);
+}
+
+/* --------------------------------------------------------------------- stats */
+
+function todayKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function bumpStats() {
+  const stats = read(STATS_KEY, {});
+  stats[todayKey()] = (stats[todayKey()] ?? 0) + 1;
+  write(STATS_KEY, stats);
+  renderStats();
+}
+
+function renderStats() {
+  const stats = read(STATS_KEY, {});
+  el.countText.textContent = `오늘 ${stats[todayKey()] ?? 0}회`;
+
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    days.push({ key, label: `${d.getMonth() + 1}/${d.getDate()}`, n: stats[key] ?? 0 });
+  }
+  const max = Math.max(1, ...days.map((d) => d.n));
+
+  el.history.replaceChildren(
+    ...days.map(({ label, n }) => {
+      const row = document.createElement("div");
+      row.className = "history-row";
+      row.innerHTML = `<span class="day"></span><span class="bar"></span><span class="n"></span>`;
+      row.querySelector(".day").textContent = label;
+      row.querySelector(".bar").style.width = `${(n / max) * 60}%`;
+      row.querySelector(".bar").style.opacity = n ? "1" : "0.2";
+      row.querySelector(".n").textContent = `${n}회`;
+      return row;
+    })
+  );
+}
+
+/* -------------------------------------------------------------------- camera */
+
+async function listCameras() {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const cams = devices.filter((d) => d.kind === "videoinput");
+  el.camera.replaceChildren(
+    ...cams.map((c, i) => {
+      const o = document.createElement("option");
+      o.value = c.deviceId;
+      o.textContent = c.label || `카메라 ${i + 1}`;
+      return o;
+    })
+  );
+  if (settings.deviceId) el.camera.value = settings.deviceId;
+}
+
+async function openCamera() {
+  stream?.getTracks().forEach((t) => t.stop());
+  const constraints = {
+    audio: false,
+    video: settings.deviceId
+      ? { deviceId: { exact: settings.deviceId }, width: { ideal: 960 }, height: { ideal: 720 } }
+      : { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } },
+  };
+  stream = await navigator.mediaDevices.getUserMedia(constraints);
+  el.video.srcObject = stream;
+  await el.video.play();
+  await new Promise((res) => {
+    if (el.video.videoWidth) return res();
+    el.video.onloadedmetadata = () => res();
+  });
+  el.overlay.width = el.video.videoWidth;
+  el.overlay.height = el.video.videoHeight;
+}
+
+async function keepAwake() {
+  try {
+    wakeLock = await navigator.wakeLock?.request("screen");
+  } catch {
+    /* not fatal — the screen may just dim */
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && running && !wakeLock) keepAwake();
+});
+
+/* ---------------------------------------------------------------------- loop */
+
+function loop(now, gen) {
+  if (!running || gen !== loopGen) return;
+  schedule();
+
+  if (now - lastTick < TARGET_INTERVAL) return;
+  const dt = now - lastTick;
+  lastTick = now;
+  smoothedFps = smoothedFps ? smoothedFps * 0.85 + (1000 / dt) * 0.15 : 1000 / dt;
+
+  let result;
+  try {
+    result = detector.detect(el.video, now);
+  } catch (err) {
+    console.error(err);
+    return;
+  }
+
+  const { ratio, face, hands, mouth, tip } = result;
+  const verdict = tracker.update(ratio, now);
+
+  if (verdict.fire) fireAlarm();
+  if (verdict.ended) clearAlarm();
+
+  render(ratio, verdict, { face, hands, mouth, tip });
+}
+
+function schedule() {
+  const gen = loopGen;
+  if (el.video.requestVideoFrameCallback) {
+    el.video.requestVideoFrameCallback((now) => loop(now, gen));
+  } else {
+    rafId = requestAnimationFrame((now) => loop(now, gen));
+  }
+}
+
+/* -------------------------------------------------------------------- render */
+
+function render(ratio, verdict, marks) {
+  el.fpsText.textContent = `${Math.round(smoothedFps)} fps`;
+
+  const max = 0.8;
+  const pct = ratio == null ? 0 : Math.max(0, Math.min(1, 1 - ratio / max)) * 100;
+  el.gaugeFill.style.width = `${pct}%`;
+  el.gaugeFill.dataset.hot = verdict.near ? "1" : "0";
+  el.gaugeMark.style.left = `${Math.max(0, Math.min(1, 1 - settings.threshold / max)) * 100}%`;
+  el.distText.textContent = ratio == null ? "거리 –" : `거리 ${ratio.toFixed(2)}`;
+
+  let state = "lost";
+  let text = "얼굴/손 미감지";
+  if (verdict.active) {
+    state = "alarm";
+    text = "감지!";
+  } else if (verdict.near) {
+    state = "near";
+    text = "가까움";
+  } else if (ratio != null) {
+    state = "ok";
+    text = "감시 중";
+  } else if (marks.face) {
+    state = "ok";
+    text = "감시 중 (손 없음)";
+  }
+  el.stateDot.dataset.state = state;
+  el.stateText.textContent = text;
+
+  ctx.clearRect(0, 0, el.overlay.width, el.overlay.height);
+  if (!settings.debug) return;
+
+  ctx.lineWidth = Math.max(2, el.overlay.width / 400);
+
+  if (marks.mouth) {
+    ctx.strokeStyle = "#34d399";
+    ctx.beginPath();
+    ctx.arc(marks.mouth.x, marks.mouth.y, ctx.lineWidth * 4, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = "rgba(96,165,250,0.85)";
+  for (const hand of marks.hands) {
+    for (const [a, b] of HAND_CONNECTIONS) {
+      ctx.beginPath();
+      ctx.moveTo(hand[a].x * el.overlay.width, hand[a].y * el.overlay.height);
+      ctx.lineTo(hand[b].x * el.overlay.width, hand[b].y * el.overlay.height);
+      ctx.stroke();
+    }
+  }
+
+  if (marks.tip && marks.mouth) {
+    ctx.strokeStyle = verdict.near ? "#ef4444" : "rgba(232,238,245,0.55)";
+    ctx.beginPath();
+    ctx.moveTo(marks.tip.x, marks.tip.y);
+    ctx.lineTo(marks.mouth.x, marks.mouth.y);
+    ctx.stroke();
+  }
+}
+
+/* ------------------------------------------------------------------ lifecycle */
+
+async function start() {
+  el.start.disabled = true;
+  const status = (msg, isError = false) => {
+    el.bootStatus.textContent = msg;
+    el.bootStatus.toggleAttribute("data-error", isError);
+  };
+
+  try {
+    ensureAudio(); // must be created inside the click handler to be allowed to play
+    status("카메라 권한 요청 중…");
+    await openCamera();
+    await listCameras();
+
+    if (!detector) detector = await createDetector(status);
+
+    status("");
+    el.boot.hidden = true;
+    el.hud.hidden = false;
+    el.toggle.hidden = false;
+    el.settingsBtn.hidden = false;
+    running = true;
+    loopGen++;
+    lastTick = performance.now();
+    keepAwake();
+    schedule();
+  } catch (err) {
+    console.error(err);
+    el.start.disabled = false;
+    status(explain(err), true);
+  }
+}
+
+function explain(err) {
+  const name = err?.name ?? "";
+  if (name === "NotAllowedError") return "카메라 권한이 거부됐습니다. 브라우저 설정에서 허용해 주세요.";
+  if (name === "NotFoundError") return "사용할 수 있는 카메라가 없습니다.";
+  if (name === "NotReadableError") return "다른 앱이 카메라를 쓰고 있습니다.";
+  if (!window.isSecureContext) return "HTTPS 또는 localhost에서만 카메라를 쓸 수 있습니다.";
+  return `시작 실패: ${err?.message ?? err}`;
+}
+
+function setRunning(next) {
+  running = next;
+  loopGen++;
+  el.toggle.textContent = next ? "일시정지" : "재개";
+  if (next) {
+    lastTick = performance.now();
+    tracker.reset();
+    keepAwake();
+    schedule();
+  } else {
+    cancelAnimationFrame(rafId);
+    clearAlarm();
+    wakeLock?.release?.();
+    wakeLock = null;
+    el.stateDot.dataset.state = "";
+    el.stateText.textContent = "일시정지";
+  }
+}
+
+/* ------------------------------------------------------------------- controls */
+
+function bindRange(id, key, format, apply) {
+  const input = $(id);
+  const out = $(`${id}Out`);
+  input.value = settings[key];
+  out.textContent = format(settings[key]);
+  input.addEventListener("input", () => {
+    settings[key] = Number(input.value);
+    out.textContent = format(settings[key]);
+    apply(settings[key]);
+    write(SETTINGS_KEY, settings);
+  });
+}
+
+function bindCheck(id, key, onChange) {
+  const input = $(id);
+  input.checked = settings[key];
+  input.addEventListener("change", async () => {
+    settings[key] = input.checked;
+    write(SETTINGS_KEY, settings);
+    await onChange?.(input.checked, input);
+  });
+}
+
+bindRange("threshold", "threshold", (v) => v.toFixed(2), (v) => (tracker.threshold = v));
+bindRange("dwell", "dwell", (v) => (v ? `${(v / 1000).toFixed(1)}초` : "즉시"), (v) => (tracker.dwellMs = v));
+bindRange("cooldown", "cooldown", (v) => `${(v / 1000).toFixed(0)}초`, (v) => (tracker.cooldownMs = v));
+
+bindCheck("sound", "sound");
+bindCheck("speech", "speech");
+bindCheck("vibrate", "vibrate");
+bindCheck("debug", "debug");
+bindCheck("mirror", "mirror", (on) => document.body.classList.toggle("mirrored", on));
+bindCheck("notify", "notify", async (on, input) => {
+  if (!on) return;
+  if (!("Notification" in window)) {
+    input.checked = settings.notify = false;
+    write(SETTINGS_KEY, settings);
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") {
+    input.checked = settings.notify = false;
+    write(SETTINGS_KEY, settings);
+  }
+});
+
+el.camera.addEventListener("change", async () => {
+  settings.deviceId = el.camera.value;
+  write(SETTINGS_KEY, settings);
+  try {
+    await openCamera();
+  } catch (err) {
+    console.error(err);
+  }
+});
+
+el.start.addEventListener("click", start);
+el.toggle.addEventListener("click", () => setRunning(!running));
+el.settingsBtn.addEventListener("click", () => {
+  renderStats();
+  el.settings.showModal();
+});
+el.testAlarm.addEventListener("click", () => {
+  fireAlarm();
+  setTimeout(clearAlarm, 2000);
+});
+el.resetStats.addEventListener("click", () => {
+  write(STATS_KEY, {});
+  renderStats();
+});
+
+// Tapping the alarm dismisses it early; the tracker still holds until you move away.
+el.alarm.addEventListener("click", clearAlarm);
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("input, select, button")) return;
+  if (e.key === " ") {
+    e.preventDefault();
+    if (!el.toggle.hidden) setRunning(!running);
+  }
+});
+
+/* ---------------------------------------------------------------------- init */
+
+document.body.classList.toggle("mirrored", settings.mirror);
+renderStats();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
+}
+
+if (!navigator.mediaDevices?.getUserMedia) {
+  el.bootStatus.textContent = "이 브라우저는 카메라를 지원하지 않습니다.";
+  el.bootStatus.setAttribute("data-error", "");
+  el.start.disabled = true;
+} else if (!window.isSecureContext) {
+  el.bootStatus.textContent = "HTTPS 또는 localhost에서 열어야 카메라를 쓸 수 있습니다.";
+  el.bootStatus.setAttribute("data-error", "");
+}

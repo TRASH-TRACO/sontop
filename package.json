@@ -1,0 +1,12 @@
+{
+  "name": "sontop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "손톱 뜯는 동작을 카메라로 감지해 경고하는 온디바이스 웹 앱 (PWA)",
+  "type": "module",
+  "scripts": {
+    "dev": "node tools/serve.js",
+    "start": "node tools/serve.js",
+    "test": "node --test test/*.test.js"
+  }
+}

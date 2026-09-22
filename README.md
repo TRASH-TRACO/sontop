@@ -9,7 +9,8 @@ npm run dev       # http://localhost:8080
 npm run dev -- --https   # 폰에서 테스트할 때 (https://<내부IP>:8443)
 ```
 
-`index.html`만 있으면 되는 정적 사이트라, GitHub Pages·Netlify·Vercel 어디에 올려도 그대로 돕니다.
+**배포된 주소: https://trash-traco.github.io/sontop/**
+`main`에 푸시하면 테스트가 돌고, 통과하면 자동으로 배포됩니다.
 
 ---
 
@@ -92,6 +93,7 @@ src/config.js           런타임/모델 주소 (셀프 호스팅 시 여기만 
 sw.js                   오프라인 셸 + 모델 캐시
 tools/serve.js          의존성 없는 개발 서버 (--https로 자체 서명 인증서)
 tools/make_icons.py     아이콘 생성 (라이브러리 없이 PNG 작성)
+.github/workflows/      main 푸시 → 테스트 → gh-pages 배포
 test/tracker.test.js    판정 로직 테스트
 docs/ios.md             네이티브 iOS / 사이드로드 / Apple Watch 경로
 ```

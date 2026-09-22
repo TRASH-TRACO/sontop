@@ -5,12 +5,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Pages is serving from the gh-pages branch, so this pushes there and GitHub's
+# own "pages build and deployment" job publishes it. Enabling the Actions-source
+# mode instead would need repo-admin rights the workflow token doesn't have.
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
-# Let a running deploy finish rather than cancelling it mid-publish.
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -25,12 +25,9 @@ jobs:
           node-version: 22
       - run: npm test
 
-  deploy:
+  publish:
     needs: test
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -40,13 +37,16 @@ jobs:
           mkdir -p _site
           cp -r index.html src icons manifest.webmanifest sw.js _site/
 
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      # gh-pages holds no history worth keeping: each deploy is a fresh single
+      # commit, so the branch never accumulates copies of the whole app.
+      - name: Publish to gh-pages
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd _site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Deploy ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages

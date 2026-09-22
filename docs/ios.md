@@ -67,11 +67,12 @@ npm run dev -- --https      # 자체 서명 인증서를 만들어 https://<내�
 확인한 다음 → 그때도 "자리 밖에서도 필요하다" 싶으면 워치 앱으로 넘어가세요.
 튜닝한 임계값과 기록이 그대로 설계 근거가 됩니다.
 
-## 배포 (GitHub Pages)
+## 배포
 
-```
-Settings → Pages → Source: Deploy from a branch → main / (root)
-```
+이미 올라가 있습니다: **https://trash-traco.github.io/sontop/**
 
-빌드 단계가 없는 정적 사이트라 그대로 올라갑니다.
-몇 분 뒤 `https://<계정>.github.io/sontop/` 을 폰 Safari로 열고 홈 화면에 추가하면 됩니다.
+폰 Safari로 그 주소를 열고 **공유 → 홈 화면에 추가**하면 끝입니다.
+
+`main`에 푸시할 때마다 `.github/workflows/pages.yml`이 테스트를 돌리고, 통과하면
+앱이 서빙하는 파일만 골라 `gh-pages` 브랜치로 푸시합니다. 그 뒤는 GitHub의
+`pages build and deployment`가 알아서 게시합니다. 설정 화면을 건드릴 일은 없습니다.

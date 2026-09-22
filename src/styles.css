@@ -159,6 +159,39 @@ button:hover { filter: brightness(1.2); }
   opacity: 0.7;
 }
 
+/* ---------- privacy veil ---------- */
+
+/* Covers the feed without hiding the <video>: display:none or visibility:hidden
+   can stop frame delivery, which would silently kill detection. An opaque layer
+   keeps the element composited and the frame callbacks firing. */
+.veil {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  background: #000;
+}
+.veil[hidden] { display: none; }
+
+.veil-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.35;
+  animation: breathe 3s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.12; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .veil-dot { animation: none; }
+}
+
 /* ---------- alarm ---------- */
 
 .alarm {
@@ -177,6 +210,21 @@ button:hover { filter: brightness(1.2); }
 .alarm-sub { font-size: 1rem; opacity: 0.85; }
 
 @keyframes pulse { from { opacity: 0.65; } to { opacity: 1; } }
+
+.alarm[data-style="subtle"] {
+  background: none;
+  box-shadow: inset 0 0 0 0.3rem var(--danger);
+  place-items: end center;
+  padding-bottom: 5.5rem;
+}
+.alarm[data-style="subtle"] .alarm-inner {
+  padding: 0.5rem 1.1rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 90%, black);
+  text-shadow: none;
+}
+.alarm[data-style="subtle"] .alarm-title { font-size: 1rem; font-weight: 600; letter-spacing: 0; }
+.alarm[data-style="subtle"] .alarm-sub { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .alarm { animation: none; }

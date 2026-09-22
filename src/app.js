@@ -17,6 +17,8 @@ const el = {
   distText: $("distText"),
   countText: $("countText"),
   alarm: $("alarm"),
+  veil: $("veil"),
+  veilBtn: $("veilBtn"),
   toggle: $("toggle"),
   settingsBtn: $("settingsBtn"),
   settings: $("settings"),
@@ -43,6 +45,8 @@ const DEFAULTS = {
   notify: false,
   debug: false,
   mirror: true,
+  blackout: false,
+  alertStyle: "full",
   deviceId: "",
 };
 
@@ -115,6 +119,7 @@ function beep(freq = 880, ms = 160, gain = 0.18) {
 }
 
 function fireAlarm() {
+  el.alarm.dataset.style = settings.alertStyle;
   el.alarm.hidden = false;
 
   if (settings.sound) {
@@ -357,6 +362,8 @@ async function start() {
     el.hud.hidden = false;
     el.toggle.hidden = false;
     el.settingsBtn.hidden = false;
+    el.veilBtn.hidden = false;
+    setBlackout(settings.blackout);
     running = true;
     loopGen++;
     lastTick = performance.now();
@@ -445,6 +452,13 @@ bindCheck("notify", "notify", async (on, input) => {
   }
 });
 
+const alertStyleInput = $("alertStyle");
+alertStyleInput.value = settings.alertStyle;
+alertStyleInput.addEventListener("change", () => {
+  settings.alertStyle = alertStyleInput.value;
+  write(SETTINGS_KEY, settings);
+});
+
 el.camera.addEventListener("change", async () => {
   settings.deviceId = el.camera.value;
   write(SETTINGS_KEY, settings);
@@ -455,6 +469,15 @@ el.camera.addEventListener("change", async () => {
   }
 });
 
+function setBlackout(on) {
+  settings.blackout = on;
+  el.veil.hidden = !on;
+  el.veilBtn.textContent = on ? "보기" : "가리기";
+  el.veilBtn.setAttribute("aria-pressed", String(on));
+  write(SETTINGS_KEY, settings);
+}
+
+el.veilBtn.addEventListener("click", () => setBlackout(!settings.blackout));
 el.start.addEventListener("click", start);
 el.toggle.addEventListener("click", () => setRunning(!running));
 el.settingsBtn.addEventListener("click", () => {
@@ -478,6 +501,9 @@ document.addEventListener("keydown", (e) => {
   if (e.key === " ") {
     e.preventDefault();
     if (!el.toggle.hidden) setRunning(!running);
+  }
+  if (e.key === "h" || e.key === "H") {
+    if (!el.veilBtn.hidden) setBlackout(!settings.blackout);
   }
 });
 

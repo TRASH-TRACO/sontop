@@ -19,6 +19,10 @@
   <video id="video" playsinline autoplay muted></video>
   <canvas id="overlay"></canvas>
 
+  <div id="veil" class="veil" hidden>
+    <span class="veil-dot"></span>
+  </div>
+
   <div id="alarm" class="alarm" hidden>
     <div class="alarm-inner">
       <div class="alarm-title">손 내려!</div>
@@ -53,6 +57,7 @@
   </div>
 
   <div class="toolbar">
+    <button id="veilBtn" class="chip" hidden>가리기</button>
     <button id="toggle" class="chip" hidden>일시정지</button>
     <button id="settingsBtn" class="chip" hidden>설정</button>
   </div>
@@ -77,6 +82,14 @@
     <label class="field">
       <span class="field-head">재알림 간격<output id="cooldownOut"></output></span>
       <input type="range" id="cooldown" min="1000" max="30000" step="1000" />
+    </label>
+
+    <label class="field">
+      <span>경고 표시</span>
+      <select id="alertStyle">
+        <option value="full">전체 화면 — 확실하게</option>
+        <option value="subtle">은은하게 — 가장자리만 (독서실·카페)</option>
+      </select>
     </label>
 
     <label class="row"><input type="checkbox" id="sound" /><span>소리 경고</span></label>

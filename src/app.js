@@ -93,6 +93,9 @@ const TARGET_INTERVAL = 1000 / 18;
 
 let audioCtx = null;
 let beepTimer = 0;
+let alarmOn = false;
+let mutedEpisode = false;
+let testUntil = 0;
 
 function ensureAudio() {
   if (!audioCtx) {
@@ -118,20 +121,44 @@ function beep(freq = 880, ms = 160, gain = 0.18) {
   osc.stop(ac.currentTime + ms / 1000 + 0.02);
 }
 
-function fireAlarm() {
-  el.alarm.dataset.style = settings.alertStyle;
-  el.alarm.hidden = false;
-
-  if (settings.sound) {
-    beep(920, 150);
-    setTimeout(() => beep(1180, 200), 180);
-    clearInterval(beepTimer);
-    beepTimer = setInterval(() => {
-      if (!el.alarm.hidden && settings.sound) beep(920, 120);
-      else clearInterval(beepTimer);
-    }, 900);
+/**
+ * The alarm is a *state*, not an event: it mirrors whether a fingertip is at the
+ * mouth right now, so it keeps going until the hand actually comes away. The
+ * one-shot reactions (counting, speech, haptics, system notification) are
+ * separate and rate-limited, so a flurry of short bites isn't counted five times.
+ */
+function setAlarm(on) {
+  if (on === alarmOn) return;
+  alarmOn = on;
+  el.alarm.hidden = !on;
+  if (on) {
+    startBeeping();
+  } else {
+    stopBeeping();
+    mutedEpisode = false; // the next episode starts audible again
   }
+}
 
+function startBeeping() {
+  stopBeeping();
+  if (!settings.sound || mutedEpisode) return;
+  beep(920, 150);
+  setTimeout(() => {
+    if (alarmOn && settings.sound && !mutedEpisode) beep(1180, 200);
+  }, 180);
+  beepTimer = setInterval(() => {
+    if (alarmOn && settings.sound && !mutedEpisode) beep(920, 120);
+    else stopBeeping();
+  }, 900);
+}
+
+function stopBeeping() {
+  clearInterval(beepTimer);
+  beepTimer = 0;
+}
+
+/** Fires once per episode, subject to the re-alert interval. */
+function announce({ count = true } = {}) {
   if (settings.speech && "speechSynthesis" in window) {
     const u = new SpeechSynthesisUtterance("손 내려");
     u.lang = "ko-KR";
@@ -145,12 +172,7 @@ function fireAlarm() {
     new Notification("손 내려!", { body: "손톱 뜯는 동작이 감지됐어요.", icon: "./icons/icon-192.png", tag: "sontop" });
   }
 
-  bumpStats();
-}
-
-function clearAlarm() {
-  el.alarm.hidden = true;
-  clearInterval(beepTimer);
+  if (count) bumpStats();
 }
 
 /* --------------------------------------------------------------------- stats */
@@ -264,8 +286,8 @@ function loop(now, gen) {
   const { ratio, face, hands, mouth, tip } = result;
   const verdict = tracker.update(ratio, now);
 
-  if (verdict.fire) fireAlarm();
-  if (verdict.ended) clearAlarm();
+  if (verdict.fire) announce();
+  setAlarm(verdict.active || now < testUntil);
 
   render(ratio, verdict, { face, hands, mouth, tip });
 }
@@ -396,7 +418,8 @@ function setRunning(next) {
     schedule();
   } else {
     cancelAnimationFrame(rafId);
-    clearAlarm();
+    testUntil = 0;
+    setAlarm(false);
     wakeLock?.release?.();
     wakeLock = null;
     el.stateDot.dataset.state = "";
@@ -456,6 +479,7 @@ const alertStyleInput = $("alertStyle");
 alertStyleInput.value = settings.alertStyle;
 alertStyleInput.addEventListener("change", () => {
   settings.alertStyle = alertStyleInput.value;
+  el.alarm.dataset.style = settings.alertStyle;
   write(SETTINGS_KEY, settings);
 });
 
@@ -485,16 +509,24 @@ el.settingsBtn.addEventListener("click", () => {
   el.settings.showModal();
 });
 el.testAlarm.addEventListener("click", () => {
-  fireAlarm();
-  setTimeout(clearAlarm, 2000);
+  testUntil = performance.now() + 2500;
+  setAlarm(true);
+  announce({ count: false }); // a rehearsal shouldn't land in today's tally
+  setTimeout(() => {
+    if (!tracker.active) setAlarm(false);
+  }, 2600);
 });
 el.resetStats.addEventListener("click", () => {
   write(STATS_KEY, {});
   renderStats();
 });
 
-// Tapping the alarm dismisses it early; the tracker still holds until you move away.
-el.alarm.addEventListener("click", clearAlarm);
+// Tapping silences the current episode but leaves the warning up — the whole
+// point is that it stays until the hand comes away from the mouth.
+el.alarm.addEventListener("click", () => {
+  mutedEpisode = true;
+  stopBeeping();
+});
 
 document.addEventListener("keydown", (e) => {
   if (e.target.matches("input, select, button")) return;
@@ -510,6 +542,7 @@ document.addEventListener("keydown", (e) => {
 /* ---------------------------------------------------------------------- init */
 
 document.body.classList.toggle("mirrored", settings.mirror);
+el.alarm.dataset.style = settings.alertStyle;
 renderStats();
 
 if ("serviceWorker" in navigator) {

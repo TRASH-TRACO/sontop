@@ -91,3 +91,40 @@ test("a flickering detection still counts if most of the window is near", () => 
   }
   assert.equal(fires, 1);
 });
+
+test("stays active for as long as the hand is there, then releases", () => {
+  const tr = new BiteTracker({ threshold: 0.2, dwellMs: 500, cooldownMs: 5000 });
+  let now = 0;
+  let fires = 0;
+
+  // A long bite: 30 seconds of the fingertip at the mouth.
+  for (; now < 30000; now += 50) {
+    const r = tr.update(0.12, now);
+    if (r.fire) fires++;
+    if (now > 1000) assert.equal(r.active, true, `dropped out at ${now}ms`);
+  }
+  assert.equal(fires, 1, "counted once, not once per re-alert interval");
+
+  // Hand comes away — and only then does it release.
+  const off = tr.update(0.9, now);
+  assert.equal(off.active, false);
+  assert.equal(off.ended, true);
+});
+
+test("a repeat bite inside the cooldown still raises the alarm, just isn't recounted", () => {
+  const tr = new BiteTracker({ threshold: 0.2, dwellMs: 300, cooldownMs: 10000 });
+  let now = 0;
+
+  let r = feed(tr, 0.1, 800, now);
+  now = r.now;
+  assert.equal(r.fires, 1);
+
+  r = feed(tr, 0.9, 400, now); // hand away
+  now = r.now;
+  assert.equal(tr.active, false);
+
+  r = feed(tr, 0.1, 800, now); // straight back to the mouth
+  now = r.now;
+  assert.equal(tr.active, true, "alarm must come back up even inside the cooldown");
+  assert.equal(r.fires, 0, "but it should not count a second time");
+});

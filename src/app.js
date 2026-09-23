@@ -40,7 +40,7 @@ const DEFAULTS = {
   dwell: 900,
   cooldown: 6000,
   sound: true,
-  speech: false,
+  speech: true,
   vibrate: true,
   notify: false,
   debug: false,
@@ -96,6 +96,11 @@ let beepTimer = 0;
 let alarmOn = false;
 let mutedEpisode = false;
 let testUntil = 0;
+let speechTimer = 0;
+let speechUnlocked = false;
+let koVoice = null;
+let lastSpokeAt = 0;
+const SPEECH_INTERVAL = 2800;
 
 function ensureAudio() {
   if (!audioCtx) {
@@ -122,10 +127,68 @@ function beep(freq = 880, ms = 160, gain = 0.18) {
 }
 
 /**
+ * Speech needs two things the detection loop can't provide on its own.
+ *
+ * iOS only lets speechSynthesis start from a user gesture, so the first call has
+ * to happen inside the start click — a silent utterance there unlocks it for
+ * every later one. And getVoices() is empty until the engine has loaded, so the
+ * Korean voice is picked up on `voiceschanged` rather than read once at startup.
+ */
+function initSpeech() {
+  if (!("speechSynthesis" in window)) return;
+  loadVoice();
+  speechSynthesis.addEventListener?.("voiceschanged", loadVoice);
+  if (speechUnlocked) return;
+  const warm = new SpeechSynthesisUtterance(" ");
+  warm.volume = 0;
+  speechSynthesis.speak(warm);
+  speechUnlocked = true;
+}
+
+function loadVoice() {
+  const voices = speechSynthesis.getVoices?.() ?? [];
+  koVoice = voices.find((v) => v.lang?.toLowerCase().startsWith("ko")) ?? null;
+}
+
+function say(text = "손 내려") {
+  if (!("speechSynthesis" in window)) return;
+  // Chrome can leave `speaking` stuck true; if it has outlasted a couple of
+  // rounds, clear it rather than going silent for the rest of the session.
+  if (speechSynthesis.speaking && performance.now() - lastSpokeAt > SPEECH_INTERVAL * 2) {
+    speechSynthesis.cancel();
+  } else if (speechSynthesis.speaking || speechSynthesis.pending) {
+    return; // still talking — don't stack utterances up
+  }
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "ko-KR";
+  if (koVoice) u.voice = koVoice;
+  u.rate = 1.05;
+  lastSpokeAt = performance.now();
+  speechSynthesis.speak(u);
+}
+
+function startSpeaking() {
+  stopSpeaking();
+  if (!settings.speech || mutedEpisode) return;
+  say();
+  speechTimer = setInterval(() => {
+    if (alarmOn && settings.speech && !mutedEpisode) say();
+    else stopSpeaking();
+  }, SPEECH_INTERVAL);
+}
+
+function stopSpeaking() {
+  clearInterval(speechTimer);
+  speechTimer = 0;
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+}
+
+/**
  * The alarm is a *state*, not an event: it mirrors whether a fingertip is at the
  * mouth right now, so it keeps going until the hand actually comes away. The
- * one-shot reactions (counting, speech, haptics, system notification) are
- * separate and rate-limited, so a flurry of short bites isn't counted five times.
+ * Sound and speech follow that state. The one-shot reactions (counting, haptics,
+ * system notification) are separate and rate-limited, so a flurry of short bites
+ * isn't counted five times.
  */
 function setAlarm(on) {
   if (on === alarmOn) return;
@@ -133,8 +196,10 @@ function setAlarm(on) {
   el.alarm.hidden = !on;
   if (on) {
     startBeeping();
+    startSpeaking();
   } else {
     stopBeeping();
+    stopSpeaking();
     mutedEpisode = false; // the next episode starts audible again
   }
 }
@@ -159,13 +224,6 @@ function stopBeeping() {
 
 /** Fires once per episode, subject to the re-alert interval. */
 function announce({ count = true } = {}) {
-  if (settings.speech && "speechSynthesis" in window) {
-    const u = new SpeechSynthesisUtterance("손 내려");
-    u.lang = "ko-KR";
-    speechSynthesis.cancel();
-    speechSynthesis.speak(u);
-  }
-
   if (settings.vibrate && navigator.vibrate) navigator.vibrate([120, 80, 120, 80, 200]);
 
   if (settings.notify && "Notification" in window && Notification.permission === "granted" && document.hidden) {
@@ -373,6 +431,7 @@ async function start() {
 
   try {
     ensureAudio(); // must be created inside the click handler to be allowed to play
+    initSpeech(); // likewise — iOS unlocks speech only from a user gesture
     status("카메라 권한 요청 중…");
     await openCamera();
     await listCameras();
@@ -509,12 +568,13 @@ el.settingsBtn.addEventListener("click", () => {
   el.settings.showModal();
 });
 el.testAlarm.addEventListener("click", () => {
-  testUntil = performance.now() + 2500;
+  // Long enough to hear the repeat, which is the part worth rehearsing.
+  testUntil = performance.now() + 4500;
   setAlarm(true);
   announce({ count: false }); // a rehearsal shouldn't land in today's tally
   setTimeout(() => {
     if (!tracker.active) setAlarm(false);
-  }, 2600);
+  }, 4600);
 });
 el.resetStats.addEventListener("click", () => {
   write(STATS_KEY, {});
@@ -526,6 +586,7 @@ el.resetStats.addEventListener("click", () => {
 el.alarm.addEventListener("click", () => {
   mutedEpisode = true;
   stopBeeping();
+  stopSpeaking();
 });
 
 document.addEventListener("keydown", (e) => {
